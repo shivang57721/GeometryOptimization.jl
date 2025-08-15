@@ -159,7 +159,7 @@ end
 
 
 function set_dofs(system::AbstractSystem, dofmgr::DofManager,
-                  x::AbstractVector{T} ) where {T <: AbstractFloat}
+                  x::AbstractVector{T} ) where {T <: Real}
     check_length_units(system, dofmgr)
 
     # get the displacement from the dof vector

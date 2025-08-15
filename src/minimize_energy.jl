@@ -33,12 +33,14 @@ Turn `system`, `calculator` and `geoopt_state::GeometryOptimizationState`
 into an `OptimizationProblem` for `solve_problem`. Note that the `system` is not updated
 automatically and that internally atomic units are used.
 """
-struct GeoOptProblem{System,Calc,Dof,State}
+struct GeoOptProblem{System,Calc,Dof,State,T}
     system::System
     calculator::Calc
     dofmgr::Dof
     geoopt_state::State
+    lattice_strain::AbstractVector{T}
 end
+
 function eval_objective_gradient!(G, prob::GeoOptProblem, ps, x)
     geoopt_state = prob.geoopt_state
     res = eval_objective(prob.system, prob.calculator, prob.dofmgr, x, ps, geoopt_state.calc_state)
@@ -154,6 +156,7 @@ end
 # do some additional calculator-specific setup (e.g. callbacks) and so on. Then
 # by calling this function the actual minimisation is started off.
 function _minimize_energy!(system, calculator, solver;
+                           lattice_strain::AbstractVector{T}=zeros(T, 6),
                            variablecell=false,
                            maxiters::Integer=100,
                            maxtime::Integer=60*60*24*365,  # 1 year
@@ -164,7 +167,7 @@ function _minimize_energy!(system, calculator, solver;
                            verbosity::Integer=0,
                            callback=GeoOptDefaultCallback(verbosity;
                                                           show_virial=variablecell),
-                           kwargs...)
+                           kwargs...) where {T}
     if isempty(system)
         throw(ArgumentError("Cannot optimise a system without atoms."))
     end
@@ -175,7 +178,7 @@ function _minimize_energy!(system, calculator, solver;
     clamp = [iatom for (iatom, atom) in enumerate(system) if get(atom, :clamp, false)]
     dofmgr = DofManager(system; variablecell, clamp)
     geoopt_state = GeometryOptimizationState(system, calculator)
-    problem = GeoOptProblem(system, calculator, dofmgr, geoopt_state)
+    problem = GeoOptProblem(system, calculator, dofmgr, geoopt_state, lattice_strain)
     cvg = GeoOptConvergence(tol_energy, tol_forces, tol_virial, variablecell)
 
     # Run the problem. Note that this mutates geoopt_state
@@ -186,7 +189,7 @@ function _minimize_energy!(system, calculator, solver;
     (; system=set_dofs(system, dofmgr, res.minimizer), geoopt_state.converged,
        energy=res.minimum * u"hartree", geoopt_state.forces, geoopt_state.virial,
        state=geoopt_state.calc_state, geoopt_state.history_energy, geoopt_state.n_iter,
-       res.optimres)
+       res.optimres, res.minimizer, minimizer_pos=_dofs2pos(res.minimizer, dofmgr))
 end
 
 # Default setup_solver function just passes things through

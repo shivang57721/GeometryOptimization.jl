@@ -26,11 +26,29 @@ function setup_solver(system, calculator, ::OptimSD; maxstep, kwargs...)
     Optim.GradientDescent(; linesearch)
 end
 
+function voigt_strain_to_full(v::AbstractVector{T}) where {T}
+    @SArray[1 + v[1]           v[6]/T(2)       v[5]/T(2);
+                v[6]/T(2)  1 + v[2]            v[4]/T(2);
+                v[5]/T(2)      v[4]/T(2)   1 + v[3]     ]
+end
 #
 # Solve problem
 #
 function solve_problem(prob::GeoOptProblem, solver::Optim.AbstractOptimizer, cvg::GeoOptConvergence;
                        callback, maxiters, maxtime, kwargs...)
+    # First apply prob.lattice_strain to the system's cell_vectors
+    if !all(iszero, prob.lattice_strain)
+        new_lattice = voigt_strain_to_full(prob.lattice_strain) * hcat(cell_vectors(prob.system)...)
+        new_cell_vectors = ntuple(i -> SVector{3,eltype(new_lattice)}(new_lattice[:,i]), 3)
+        prob = GeoOptProblem(
+            AbstractSystem(prob.system; cell_vectors = new_cell_vectors),
+            prob.calculator,
+            prob.dofmgr,
+            prob.geoopt_state,
+            prob.lattice_strain
+        )
+    end
+
     ps = AC.get_parameters(prob.calculator)
     fg! = function(F, G, x)
         objective = eval_objective_gradient!(G, prob, ps, x)
@@ -111,3 +129,58 @@ function solve_problem(prob, solver::Optim.ZerothOrderOptimizer, cvg;
     # TODO Supporting this needs more fiddeling with the callbacks and convergence checks
     throw(ArgumentError("Zeroth-order optimizers are currently not supported."))
 end
+
+import ForwardDiff
+# Custom ForwardDiff rule for differentiating through lattice strain
+function solve_problem(prob::GeoOptProblem{System,Calc,Dof,State,T}, solver::Optim.AbstractOptimizer, cvg::GeoOptConvergence;
+                       callback, maxiters, maxtime, kwargs...) where {System,Calc,Dof,State,T<:ForwardDiff.Dual}
+
+    # First you solve the primal problem
+    println("Solving primal problem ...")
+    lattice_strain_primal = ForwardDiff.value.(prob.lattice_strain)
+    prob_primal = GeoOptProblem(
+        prob.system,
+        prob.calculator,
+        prob.dofmgr,
+        prob.geoopt_state,
+        lattice_strain_primal
+    )
+    res = solve_problem(prob_primal, solver, cvg; callback, maxiters, maxtime, kwargs...)
+
+    # Use implicit function theorem to calculate dx_min/dθ. In this case, θ = lattice_strain
+    function wrap_fg(x, lattice_strain)
+        # G = zeros(promote_type(eltype(x), eltype(lattice_strain)), length(x))
+
+        # Apply lattice_strain to the system's cell_vectors
+        new_lattice = austrip.(voigt_strain_to_full(lattice_strain) * hcat(cell_vectors(prob.system)...))
+        new_cell_vectors = ntuple(i -> SVector{3,eltype(new_lattice)}(new_lattice[:,i]), 3)
+        new_system = AbstractSystem(prob.system; cell_vectors = new_cell_vectors)
+
+        ps = AC.get_parameters(prob.calculator)
+        res_inner = eval_gradient(new_system, prob.calculator, prob.dofmgr, x, ps, prob.geoopt_state.calc_state) 
+        (;F=res_inner.energy, G=res_inner.grad)
+    end
+
+    println("Computing hessian ...")
+    hess_x = ForwardDiff.jacobian(x -> wrap_fg(x, lattice_strain_primal).G, res.minimizer)
+    hess_x = factorize(hess_x)
+
+    println("Computing cross-derivative ...")
+    F_dual, grads_dual = wrap_fg(res.minimizer, prob.lattice_strain)
+
+    δxstar = ntuple(ForwardDiff.npartials(T)) do α
+        -(hess_x \ ForwardDiff.partials.(grads_dual, α))
+    end
+
+    # δxstar = ntuple(ForwardDiff.npartials(T)) do α
+    #     _convert(res.minimizer, δxstar[α])  # Wrap partials back into ComponentVector
+    # end
+
+    DT = ForwardDiff.Dual{ForwardDiff.tagtype(T)}
+    xstar_dual = map((xi, δxi...) -> DT(xi, δxi), res.minimizer, δxstar...)
+
+    (; minimizer=xstar_dual, minimum=F_dual, res.optimres)
+end
+
+# _convert(x::AbstractVector, y::AbstractVector) = y
+# _convert(x::T, y::AbstractVector) where {T <: ComponentVector} = T(y, getaxes(x))
