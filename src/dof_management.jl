@@ -168,8 +168,12 @@ function set_dofs(system::AbstractSystem, dofmgr::DofManager,
 
     # convert the displacements to positions
     positions = [ F * (dofmgr.X0[i] + U[i] * dofmgr.r0) for i = 1:length(U) ]
-    bb_old = dofmgr.C0
-    bb_new = ntuple(i -> F * bb_old[i], 3)
+    if fixedcell(dofmgr)
+        bb_new = cell_vectors(system)
+    else
+        bb_old = dofmgr.C0
+        bb_new = ntuple(i -> F * bb_old[i], 3)
+    end
 
     # and update the system
     particles = [Atom(atom; position) for (atom, position) in zip(system, positions)]

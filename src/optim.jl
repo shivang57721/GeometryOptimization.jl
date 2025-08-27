@@ -149,15 +149,17 @@ function solve_problem(prob::GeoOptProblem{System,Calc,Dof,State,T}, solver::Opt
 
     # Use implicit function theorem to calculate dx_min/dθ. In this case, θ = lattice_strain
     function wrap_fg(x, lattice_strain)
-        # G = zeros(promote_type(eltype(x), eltype(lattice_strain)), length(x))
+        DT = promote_type(eltype(x), eltype(lattice_strain))
+        x = convert.(DT, x)
 
         # Apply lattice_strain to the system's cell_vectors
         new_lattice = austrip.(voigt_strain_to_full(lattice_strain) * hcat(cell_vectors(prob.system)...))
-        new_cell_vectors = ntuple(i -> SVector{3,eltype(new_lattice)}(new_lattice[:,i]), 3)
+        new_cell_vectors = ntuple(i -> SVector{3,DT}(new_lattice[:,i]), 3)
         new_system = AbstractSystem(prob.system; cell_vectors = new_cell_vectors)
 
         ps = AC.get_parameters(prob.calculator)
-        res_inner = eval_gradient(new_system, prob.calculator, prob.dofmgr, x, ps, prob.geoopt_state.calc_state) 
+
+        res_inner = eval_gradient(new_system, prob.calculator, prob.dofmgr, x, ps, prob.geoopt_state.calc_state)
         (;F=res_inner.energy, G=res_inner.grad)
     end
 
@@ -172,15 +174,8 @@ function solve_problem(prob::GeoOptProblem{System,Calc,Dof,State,T}, solver::Opt
         -(hess_x \ ForwardDiff.partials.(grads_dual, α))
     end
 
-    # δxstar = ntuple(ForwardDiff.npartials(T)) do α
-    #     _convert(res.minimizer, δxstar[α])  # Wrap partials back into ComponentVector
-    # end
-
     DT = ForwardDiff.Dual{ForwardDiff.tagtype(T)}
     xstar_dual = map((xi, δxi...) -> DT(xi, δxi), res.minimizer, δxstar...)
 
     (; minimizer=xstar_dual, minimum=F_dual, res.optimres)
 end
-
-# _convert(x::AbstractVector, y::AbstractVector) = y
-# _convert(x::T, y::AbstractVector) where {T <: ComponentVector} = T(y, getaxes(x))
