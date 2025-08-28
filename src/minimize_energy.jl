@@ -186,7 +186,7 @@ function _minimize_energy!(system, calculator, solver;
                         callback, maxiters, maxtime, kwargs...)
     geoopt_state.converged || @warn "Geometry optimisation not converged."
 
-    (; system=set_dofs(system, dofmgr, res.minimizer), geoopt_state.converged,
+    (; system=res.system, geoopt_state.converged,
        energy=res.minimum * u"hartree", geoopt_state.forces, geoopt_state.virial,
        state=geoopt_state.calc_state, geoopt_state.history_energy, geoopt_state.n_iter,
        res.optimres, res.minimizer, minimizer_pos=_dofs2pos(res.minimizer, dofmgr))

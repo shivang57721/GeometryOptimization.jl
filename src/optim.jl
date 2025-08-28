@@ -121,7 +121,7 @@ function solve_problem(prob::GeoOptProblem, solver::Optim.AbstractOptimizer, cvg
     )
     optimres = Optim.optimize(Optim.only_fg!(fg!), x0, solver, options)
 
-    (; minimizer=Optim.minimizer(optimres), minimum=Optim.minimum(optimres), optimres)
+    (; system=set_dofs(prob.system, prob.dofmgr, Optim.minimizer(optimres)), minimizer=Optim.minimizer(optimres), minimum=Optim.minimum(optimres), optimres)
 end
 
 function solve_problem(prob, solver::Optim.ZerothOrderOptimizer, cvg;
@@ -177,5 +177,8 @@ function solve_problem(prob::GeoOptProblem{System,Calc,Dof,State,T}, solver::Opt
     DT = ForwardDiff.Dual{ForwardDiff.tagtype(T)}
     xstar_dual = map((xi, δxi...) -> DT(xi, δxi), res.minimizer, δxstar...)
 
-    (; minimizer=xstar_dual, minimum=F_dual, res.optimres)
+    new_lattice = austrip.(voigt_strain_to_full(prob.lattice_strain) * hcat(cell_vectors(prob.system)...))
+    new_cell_vectors = ntuple(i -> SVector{3,DT}(new_lattice[:,i]), 3)
+    strained_system = AbstractSystem(prob.system; cell_vectors = new_cell_vectors)
+    (; system=set_dofs(strained_system, prob.dofmgr, xstar_dual), minimizer=xstar_dual, minimum=F_dual, res.optimres)
 end
